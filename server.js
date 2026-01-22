@@ -19,36 +19,44 @@ cloudinary.config({
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 10 * 1024 * 1024 },
 });
 
 let images = [];
 
-app.post("/upload", upload.single("image"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "No file uploaded" });
-  }
-
-  const stream = cloudinary.uploader.upload_stream(
-    { folder: "uploads" },
-    (error, result) => {
-      if (error) {
-        return res.status(500).json({ error: "Cloudinary upload failed" });
+app.post("/upload", (req, res) => {
+  upload.single("image")(req, res, err => {
+    if (err) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({ error: "File too large" });
       }
-
-      const image = {
-        id: result.public_id,
-        url: result.secure_url,
-        public_id: result.public_id,
-      };
-
-      images.push(image);
-
-      res.json(image);
+      return res.status(400).json({ error: err.message });
     }
-  );
 
-  stream.end(req.file.buffer);
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    const stream = cloudinary.uploader.upload_stream(
+      { folder: "uploads" },
+      (error, result) => {
+        if (error) {
+          return res.status(500).json({ error: "Cloudinary upload failed" });
+        }
+
+        const image = {
+          id: result.public_id,
+          url: result.secure_url,
+          public_id: result.public_id,
+        };
+
+        images.push(image);
+        res.json(image);
+      }
+    );
+
+    stream.end(req.file.buffer);
+  });
 });
 
 app.get("/images", (req, res) => {
@@ -58,15 +66,12 @@ app.get("/images", (req, res) => {
 app.delete("/images/:id", async (req, res) => {
   try {
     const index = images.findIndex(i => i.id === req.params.id);
-
     if (index === -1) {
       return res.status(404).json({ error: "Not found" });
     }
 
     const image = images[index];
-
     await cloudinary.uploader.destroy(image.public_id);
-
     images.splice(index, 1);
 
     res.json({ success: true });
