@@ -8,7 +8,10 @@ dotenv.config();
 
 const app = express();
 
-app.use(cors());
+app.use(cors({
+  origin: "http://localhost:5173",
+  credentials: true
+}));
 app.use(express.json());
 
 cloudinary.config({
@@ -24,67 +27,115 @@ const upload = multer({
 
 let images = [];
 
-app.post("/upload", (req, res) => {
-  upload.single("image")(req, res, err => {
-    if (err) {
-      if (err.code === "LIMIT_FILE_SIZE") {
-        return res.status(400).json({ error: "File too large" });
-      }
-      return res.status(400).json({ error: err.message });
-    }
+app.post("/upload", upload.single("image"), async (req, res) => {
+  try {
+    console.log("📥 Получен запрос на загрузку");
+    console.log("📁 Файл:", req.file ? "есть" : "нет");
+    console.log("📋 Тело запроса:", req.body);
+    console.log("🏷️ Категория:", req.body.category);
 
     if (!req.file) {
       return res.status(400).json({ error: "No file uploaded" });
     }
 
-    const stream = cloudinary.uploader.upload_stream(
-      { folder: "uploads" },
-      (error, result) => {
-        if (error) {
-          return res.status(500).json({ error: "Cloudinary upload failed" });
+    if (!req.body.category) {
+      return res.status(400).json({ error: "Category is required" });
+    }
+
+    // Загружаем на Cloudinary
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { 
+          folder: "uploads",
+          resource_type: "auto"
+        },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
         }
+      );
+      
+      stream.end(req.file.buffer);
+    });
 
-        const image = {
-          id: result.public_id,
-          url: result.secure_url,
-          public_id: result.public_id,
-        };
+    const image = {
+      id: result.public_id,
+      url: result.secure_url,
+      public_id: result.public_id,
+      filename: req.file.originalname,
+      category: req.body.category,
+      uploadedAt: new Date().toISOString()
+    };
 
-        images.push(image);
-        res.json(image);
-      }
-    );
+    images.push(image);
+    
+    console.log("✅ Изображение успешно загружено:", image);
+    res.json(image);
 
-    stream.end(req.file.buffer);
-  });
+  } catch (error) {
+    console.error("❌ Ошибка загрузки:", error);
+    res.status(500).json({ 
+      error: "Upload failed",
+      details: error.message 
+    });
+  }
 });
 
 app.get("/images", (req, res) => {
+  console.log("📸 Отправляем список изображений:", images.length);
   res.json(images);
 });
 
 app.delete("/images/:id", async (req, res) => {
   try {
+    console.log("🗑️ Удаление изображения:", req.params.id);
+    
     const index = images.findIndex(i => i.id === req.params.id);
     if (index === -1) {
-      return res.status(404).json({ error: "Not found" });
+      return res.status(404).json({ error: "Image not found" });
     }
 
     const image = images[index];
+    
     await cloudinary.uploader.destroy(image.public_id);
+    
     images.splice(index, 1);
 
+    console.log("✅ Изображение удалено:", req.params.id);
     res.json({ success: true });
-  } catch {
-    res.status(500).json({ error: "Delete failed" });
+
+  } catch (error) {
+    console.error("❌ Ошибка удаления:", error);
+    res.status(500).json({ 
+      error: "Delete failed",
+      details: error.message 
+    });
   }
 });
 
 app.get("/test", (req, res) => {
-  res.json({ status: "OK" });
+  console.log("🔗 Тестовый запрос получен");
+  res.json({ 
+    status: "OK", 
+    message: "Server is running",
+    imagesCount: images.length,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get("/health", (req, res) => {
+  res.json({ status: "healthy" });
+});
+
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "http://localhost:5173");
+  res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  next();
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🔗 http://localhost:${PORT}`);
 });
