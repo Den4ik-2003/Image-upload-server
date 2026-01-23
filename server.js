@@ -7,12 +7,20 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
-
 app.use(cors({
-  origin: "http://localhost:5173",
-  credentials: true
+  origin: "*", 
+  methods: ["GET", "POST", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
 }));
+
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} ${req.method} ${req.url}`);
+  console.log("Headers:", req.headers);
+  next();
+});
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -20,101 +28,17 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
+const storage = multer.memoryStorage();
+const upload = multer({ 
+  storage,
+  limits: { 
+    fileSize: 10 * 1024 * 1024 
+  }
 });
 
 let images = [];
 
-app.post("/upload", upload.single("image"), async (req, res) => {
-  try {
-    console.log("📥 Получен запрос на загрузку");
-    console.log("📁 Файл:", req.file ? "есть" : "нет");
-    console.log("📋 Тело запроса:", req.body);
-    console.log("🏷️ Категория:", req.body.category);
-
-    if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
-    }
-
-    if (!req.body.category) {
-      return res.status(400).json({ error: "Category is required" });
-    }
-
-    // Загружаем на Cloudinary
-    const result = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(
-        { 
-          folder: "uploads",
-          resource_type: "auto"
-        },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
-        }
-      );
-      
-      stream.end(req.file.buffer);
-    });
-
-    const image = {
-      id: result.public_id,
-      url: result.secure_url,
-      public_id: result.public_id,
-      filename: req.file.originalname,
-      category: req.body.category,
-      uploadedAt: new Date().toISOString()
-    };
-
-    images.push(image);
-    
-    console.log("✅ Изображение успешно загружено:", image);
-    res.json(image);
-
-  } catch (error) {
-    console.error("❌ Ошибка загрузки:", error);
-    res.status(500).json({ 
-      error: "Upload failed",
-      details: error.message 
-    });
-  }
-});
-
-app.get("/images", (req, res) => {
-  console.log("📸 Отправляем список изображений:", images.length);
-  res.json(images);
-});
-
-app.delete("/images/:id", async (req, res) => {
-  try {
-    console.log("🗑️ Удаление изображения:", req.params.id);
-    
-    const index = images.findIndex(i => i.id === req.params.id);
-    if (index === -1) {
-      return res.status(404).json({ error: "Image not found" });
-    }
-
-    const image = images[index];
-    
-    await cloudinary.uploader.destroy(image.public_id);
-    
-    images.splice(index, 1);
-
-    console.log("✅ Изображение удалено:", req.params.id);
-    res.json({ success: true });
-
-  } catch (error) {
-    console.error("❌ Ошибка удаления:", error);
-    res.status(500).json({ 
-      error: "Delete failed",
-      details: error.message 
-    });
-  }
-});
-
 app.get("/test", (req, res) => {
-  console.log("🔗 Тестовый запрос получен");
   res.json({ 
     status: "OK", 
     message: "Server is running",
@@ -123,19 +47,134 @@ app.get("/test", (req, res) => {
   });
 });
 
-app.get("/health", (req, res) => {
-  res.json({ status: "healthy" });
+app.get("/images", (req, res) => {
+  res.json(images);
+});
+!
+app.post("/upload", upload.single("image"), async (req, res) => {
+  try {
+    console.log("📥 POST /upload отримано");
+    console.log("📁 Файл:", req.file ? `${req.file.originalname} (${req.file.size} bytes)` : "Немає");
+    console.log("📋 Тіло:", req.body);
+    console.log("🏷️ Категорія:", req.body.category);
+
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    if (!req.body.category) {
+      return res.status(400).json({ error: "Category is required" });
+    }
+    const result = await new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        { 
+          folder: "image-uploads",
+          resource_type: "auto"
+        },
+        (error, result) => {
+          if (error) {
+            console.error("❌ Cloudinary error:", error);
+            reject(error);
+          } else {
+            resolve(result);
+          }
+        }
+      );
+      uploadStream.end(req.file.buffer);
+    });
+
+    const newImage = {
+      id: result.public_id,
+      url: result.secure_url,
+      public_id: result.public_id,
+      filename: req.file.originalname,
+      category: req.body.category,
+      uploadedAt: new Date().toISOString(),
+      size: req.file.size,
+      format: result.format
+    };
+
+    images.push(newImage);
+    
+    console.log("✅ Зображення завантажено:", newImage);
+    res.json(newImage);
+
+  } catch (error) {
+    console.error("❌ Помилка завантаження:", error);
+    res.status(500).json({ 
+      error: "Upload failed",
+      message: error.message 
+    });
+  }
 });
 
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "http://localhost:5173");
-  res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type");
-  next();
+app.delete("/images/:id", async (req, res) => {
+  try {
+    const imageId = req.params.id;
+    console.log(`🗑️ DELETE /images/${imageId}`);
+    
+    const imageIndex = images.findIndex(img => img.id === imageId);
+    
+    if (imageIndex === -1) {
+      return res.status(404).json({ error: "Image not found" });
+    }
+
+    const image = images[imageIndex];
+    
+    await cloudinary.uploader.destroy(image.public_id);
+    
+    images.splice(imageIndex, 1);
+    
+    res.json({ success: true, message: "Image deleted" });
+    
+  } catch (error) {
+    console.error("❌ Помилка видалення:", error);
+    res.status(500).json({ 
+      error: "Delete failed",
+      message: error.message 
+    });
+  }
+});
+
+app.get("/health", (req, res) => {
+  res.json({ 
+    status: "healthy",
+    serverTime: new Date().toISOString(),
+    memoryUsage: process.memoryUsage()
+  });
+});
+
+app.options("*", (req, res) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.sendStatus(200);
+});
+
+app.use((req, res) => {
+  res.status(404).json({ 
+    error: "Route not found",
+    method: req.method,
+    url: req.url
+  });
+});
+
+app.use((error, req, res, next) => {
+  console.error("🔥 Серверна помилка:", error);
+  res.status(500).json({ 
+    error: "Internal server error",
+    message: process.env.NODE_ENV === "development" ? error.message : undefined
+  });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🚀 Сервер запущено на порті ${PORT}`);
   console.log(`🔗 http://localhost:${PORT}`);
+  console.log(`🌍 Cloudinary налаштовано: ${process.env.CLOUDINARY_CLOUD_NAME ? "Так" : "Ні"}`);
+  console.log(`📁 Ендпоінти доступні:`);
+  console.log(`   GET  /test`);
+  console.log(`   GET  /images`);
+  console.log(`   POST /upload`);
+  console.log(`   DELETE /images/:id`);
 });
